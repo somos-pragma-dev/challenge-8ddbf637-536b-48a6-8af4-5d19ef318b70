@@ -123,478 +123,304 @@ El participante que recibirá este proyecto los debe encontrar y resolver él mi
 
 INPUT
 Aquí está la cadena con los archivos:
-// === ARCHIVO: package.json ===
-{
-  "name": "agile-project-management-platform",
-  "version": "1.0.0",
-  "main": "src/main/index.ts",
-  "scripts": {
-    "start": "ts-node src/main/index.ts",
-    "test": "jest"
-  },
-  "dependencies": {
-    "express": "4.18.2",
-    "knex": "2.6.1",
-    "pg": "8.11.3",
-    "redis": "4.2.3",
-    "elasticsearch": "17.4.0",
-    "pino": "8.8.0"
-  },
-  "devDependencies": {
-    "typescript": "5.2.2",
-    "jest": "29.7.0",
-    "ts-node": "^10.9.1"
+// === ARCHIVO: src/config/auth.config.ts ===
+import { PassportStatic } from 'passport';
+import { Strategy as OAuth2Strategy } from 'passport-oauth2';
+import { ExtractJwt, Strategy as JwtStrategy } from 'passport-jwt';
+import { Request } from 'express';
+
+export const configureAuth = (passport: PassportStatic) => {
+  passport.use(
+    new OAuth2Strategy({
+      authorizationURL: 'https://oauth2provider.com/authorize',
+      tokenURL: 'https://oauth2provider.com/token',
+      clientID: 'YOUR_CLIENT_ID',
+      clientSecret: 'YOUR_CLIENT_SECRET',
+      callbackURL: 'http://localhost:3000/auth/callback',
+    }, (accessToken, refreshToken, profile, done) => {
+      return done(null, { accessToken, refreshToken, profile });
+    })
+  );
+
+  passport.use(
+    new JwtStrategy({
+      jwtFromRequest: ExtractJwt.fromExtractors([(req: Request) => {
+        let token = null;
+        if (req && req.cookies) {
+          token = req.cookies['jwt'];
+        }
+        return token;
+      }]),
+      secretOrKey: 'YOUR_SECRET_KEY',
+    }, (jwtPayload, done) => {
+      return done(null, jwtPayload);
+    })
+  );
+};
+
+
+// === ARCHIVO: src/domain/task.ts ===
+export interface Task {
+  id: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export enum TaskStatus {
+  BACKLOG = 'backlog',
+  IN_PROGRESS = 'in_progress',
+  REVIEW = 'review',
+  DONE = 'done',
+  ARCHIVED = 'archived',
+}
+
+// === ARCHIVO: src/application/task.service.ts ===
+import { Task } from '../domain/task';
+import { TaskRepository } from '../infrastructure/database/task.repository';
+
+export class TaskService {
+  constructor(private taskRepository: TaskRepository) {}
+
+  async createTask(task: Task): Promise<Task> {
+    return this.taskRepository.save(task);
+  }
+
+  async getTaskById(id: string): Promise<Task | null> {
+    return this.taskRepository.findById(id);
+  }
+
+  async updateTask(task: Task): Promise<Task> {
+    return this.taskRepository.update(task);
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    await this.taskRepository.delete(id);
   }
 }
 
-// === ARCHIVO: tsconfig.json ===
-{
-  "compilerOptions": {
-    "target": "ES2020",
-    "module": "commonjs",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "outDir": "dist",
-    "rootDir": "src"
+// === ARCHIVO: src/infrastructure/database/task.repository.ts ===
+import { Task } from '../../domain/task';
+import { getRepository } from 'typeorm';
+
+export class TaskRepository {
+  async save(task: Task): Promise<Task> {
+    const repository = getRepository(Task);
+    return await repository.save(task);
+  }
+
+  async findById(id: string): Promise<Task | null> {
+    const repository = getRepository(Task);
+    return await repository.findOne(id);
+  }
+
+  async update(task: Task): Promise<Task> {
+    const repository = getRepository(Task);
+    return await repository.save(task);
+  }
+
+  async delete(id: string): Promise<void> {
+    const repository = getRepository(Task);
+    await repository.delete(id);
   }
 }
 
-// === ARCHIVO: src/main/index.ts ===
-import "reflect-metadata";
-import express from 'express';
-import { AuthController } from '../application/auth/AuthController';
-import { WorkflowController } from '../application/workflow/WorkflowController';
-import { ReportController } from '../application/reports/ReportController';
-import { CacheService } from '../infrastructure/cache/CacheService';
-import { SearchService } from '../infrastructure/search/SearchService';
-import { RateLimitingService } from '../infrastructure/rateLimiting/RateLimitingService';
-import { SecurityConfig } from '../config/security.config';
+// === ARCHIVO: src/api/task.controller.ts ===
+import { Request, Response } from 'express';
+import { TaskService } from '../application/task.service';
 
-const app = express();
-app.use(express.json());
+export class TaskController {
+  constructor(private taskService: TaskService) {}
 
-// Middleware de seguridad
-app.use(SecurityConfig.middleware);
-
-// Rutas
-app.use('/auth', AuthController);
-app.use('/workflow', WorkflowController);
-app.use('/reports', ReportController);
-
-// Servicios
-new CacheService();
-new SearchService();
-new RateLimitingService();
-
-app.listen(3000, () => {
-  console.log('Server is running on port 3000');
-});
-
-// === ARCHIVO: src/application/auth/AuthService.ts ===
-import { Auth } from '../../domain/auth/Auth';
-import { AuthRepository } from '../../infrastructure/auth/AuthRepository';
-
-export class AuthService {
-  private authRepository: AuthRepository;
-
-  constructor(authRepository: AuthRepository) {
-    this.authRepository = authRepository;
+  async createTask(req: Request, res: Response): Promise<void> {
+    try {
+      const task = await this.taskService.createTask(req.body);
+      res.status(201).json(task);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
   }
 
-  async authenticate(username: string, password: string): Promise<Auth> {
-    // Implementación de la autenticación
-    return new Auth();
+  async getTaskById(req: Request, res: Response): Promise<void> {
+    try {
+      const task = await this.taskService.getTaskById(req.params.id);
+      if (task) {
+        res.status(200).json(task);
+      } else {
+        res.status(404).json({ error: 'Task not found' });
+      }
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
   }
-}
 
-// === ARCHIVO: src/domain/auth/Auth.ts ===
-export class Auth {
-  constructor(
-    public id: string,
-    public username: string,
-    public roles: string[]
-  ) {}
-}
+  async updateTask(req: Request, res: Response): Promise<void> {
+    try {
+      const task = await this.taskService.updateTask(req.body);
+      res.status(200).json(task);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  }
 
-// === ARCHIVO: src/infrastructure/auth/AuthRepository.ts ===
-import { Auth } from '../domain/auth/Auth';
-
-export class AuthRepository {
-  async getAuth(username: string): Promise<Auth> {
-    // Implementación del repositorio de autenticación
-    return new Auth('', '', []);
+  async deleteTask(req: Request, res: Response): Promise<void> {
+    try {
+      await this.taskService.deleteTask(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
   }
 }
 
-// === ARCHIVO: src/main/auth/AuthController.ts ===
-import express from 'express';
-import { AuthService } from '../application/auth/AuthService';
-
-const router = express.Router();
-const authService = new AuthService(new AuthRepository());
-
-router.post('/login', async (req, res) => {
-  const { username, password } = req.body;
-  try {
-    const auth = await authService.authenticate(username, password);
-    res.status(200).json(auth);
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid credentials' });
-  }
-});
-
-export { router as AuthController };
-
-// === ARCHIVO: src/application/workflow/WorkflowService.ts ===
-import { Workflow } from '../../domain/workflow/Workflow';
-import { WorkflowRepository } from '../../infrastructure/workflow/WorkflowRepository';
-
-export class WorkflowService {
-  private workflowRepository: WorkflowRepository;
-
-  constructor(workflowRepository: WorkflowRepository) {
-    this.workflowRepository = workflowRepository;
-  }
-
-  async getWorkflow(id: string): Promise<Workflow> {
-    // Implementación del motor de workflow
-    return new Workflow();
-  }
-}
-
-// === ARCHIVO: src/domain/workflow/Workflow.ts ===
-export class Workflow {
-  constructor(
-    public id: string,
-    public name: string,
-    public states: string[]
-  ) {}
-}
-
-// === ARCHIVO: src/infrastructure/workflow/WorkflowRepository.ts ===
-import { Workflow } from '../domain/workflow/Workflow';
-
-export class WorkflowRepository {
-  async getWorkflow(id: string): Promise<Workflow> {
-    // Implementación del repositorio de workflow
-    return new Workflow('', '', []);
-  }
-}
-
-// === ARCHIVO: src/main/workflow/WorkflowController.ts ===
-import express from 'express';
-import { WorkflowService } from '../application/workflow/WorkflowService';
-
-const router = express.Router();
-const workflowService = new WorkflowService(new WorkflowRepository());
-
-router.get('/:id', async (req, res) => {
-  const { id } = req.params;
-  try {
-    const workflow = await workflowService.getWorkflow(id);
-    res.status(200).json(workflow);
-  } catch (error) {
-    res.status(404).json({ error: 'Workflow not found' });
-  }
-});
-
-export { router as WorkflowController };
-
-// === ARCHIVO: src/application/reports/ReportService.ts ===
-import { Report } from '../../domain/reports/Report';
-import { ReportRepository } from '../../infrastructure/reports/ReportRepository';
-
-export class ReportService {
-  private reportRepository: ReportRepository;
-
-  constructor(reportRepository: ReportRepository) {
-    this.reportRepository = reportRepository;
-  }
-
-  async getReport(id: string): Promise<Report> {
-    // Implementación del servicio de reportes
-    return new Report();
-  }
-}
-
-// === ARCHIVO: src/domain/reports/Report.ts ===
-export class Report {
-  constructor(
-    public id: string,
-    public title: string,
-    public data: any
-  ) {}
-}
-
-// === ARCHIVO: src/infrastructure/reports/ReportRepository.ts ===
-import { Report } from '../domain/reports/Report';
-
-export class ReportRepository {
-  async getReport(id: string): Promise<Report> {
-    // Implementación del repositorio de reportes
-    return new Report('', '', {});
-  }
-}
-
-// === ARCHIVO: src/main/reports/ReportController.ts ===
-import express from 'express';
-import { ReportService } from '../application/reports/ReportService';
-
-const router = express.Router();
-const reportService = new ReportService(new ReportRepository());
-
-router.get('/:id', async (req, res) => {
-  const { id } = req.params;
-  try {
-    const report = await reportService.getReport(id);
-    res.status(200).json(report);
-  } catch (error) {
-    res.status(404).json({ error: 'Report not found' });
-  }
-});
-
-export { router as ReportController };
-
-// === ARCHIVO: src/infrastructure/cache/CacheService.ts ===
+// === ARCHIVO: src/config/redis.config.ts ===
 import redis from 'redis';
 
-export class CacheService {
-  private client: redis.RedisClient;
-
-  constructor() {
-    this.client = redis.createClient({
-      host: 'localhost',
-      port: 6379
-    });
-  }
-
-  async set(key: string, value: any, ttl: number): Promise<void> {
-    this.client.setex(key, ttl, JSON.stringify(value));
-  }
-
-  async get(key: string): Promise<any> {
-    return new Promise((resolve, reject) => {
-      this.client.get(key, (err, reply) => {
-        if (err) reject(err);
-        else resolve(JSON.parse(reply));
-      });
-    });
-  }
-}
-
-// === ARCHIVO: src/infrastructure/search/SearchService.ts ===
-import { Client } from 'elasticsearch';
-
-export class SearchService {
-  private client: Client;
-
-  constructor() {
-    this.client = new Client({ node: 'http://localhost:9200' });
-  }
-
-  async search(query: string): Promise<any> {
-    return this.client.search({
-      index: 'tasks',
-      body: {
-        query: {
-          match: { message: query }
-        }
-      }
-    });
-  }
-}
-
-// === ARCHIVO: src/infrastructure/rateLimiting/RateLimitingService.ts ===
-import rateLimit from 'express-rate-limit';
-
-export class RateLimitingService {
-  constructor() {
-    // Implementación del servicio de limitación de tasas
-  }
-
-  getLimiter() {
-    return rateLimit({
-      windowMs: 15 * 60 * 1000, // 15 minutes
-      max: 100 // limit each IP to 100 requests per windowMs
-    });
-  }
-}
-
-// === ARCHIVO: config/auth.config.ts ===
-export const authConfig = {
-  // Configuración de autenticación
-};
-
-// === ARCHIVO: config/workflow.config.ts ===
-export const workflowConfig = {
-  // Configuración de workflow
-};
-
-// === ARCHIVO: config/reports.config.ts ===
-export const reportsConfig = {
-  // Configuración de reportes
-};
-
-// === ARCHIVO: config/cache.config.ts ===
-export const cacheConfig = {
-  // Configuración de caché
-};
-
-// === ARCHIVO: config/search.config.ts ===
-export const searchConfig = {
-  // Configuración de búsqueda
-};
-
-// === ARCHIVO: config/rateLimiting.config.ts ===
-export const rateLimitingConfig = {
-  // Configuración de limitación de tasas
-};
-
-// === ARCHIVO: config/security.config.ts ===
-import { Request, Response, NextFunction } from 'express';
-
-export class SecurityConfig {
-  static middleware(req: Request, res: Response, next: NextFunction) {
-    // Implementación del middleware de seguridad
-    next();
-  }
-}
-
-// === ARCHIVO: migrations/initial.ts ===
-import knex from 'knex';
-
-const db = knex({
-  client: 'pg',
-  connection: {
-    host : '127.0.0.1',
-    user : 'your_database_user',
-    password : 'your_database_password',
-    database : 'your_database'
-  }
+export const redisClient = redis.createClient({
+  host: 'localhost',
+  port: 6379,
 });
 
-export async function up() {
-  // Implementación de la migración inicial
-  await db.schema.createTable('tasks', (table) => {
-    table.increments('id');
-    table.string('title');
-    table.text('description');
+redisClient.on('error', (err) => {
+  console.error('Redis error:', err);
+});
+
+// === ARCHIVO: src/config/websocket.config.ts ===
+import { Server } from 'http';
+import { Server as SocketServer } from 'socket.io';
+
+export let io: SocketServer | null = null;
+
+export const setupWebSocket = (httpServer: Server) => {
+  io = new SocketServer(httpServer, {
+    cors: {
+      origin: '*',
+    },
   });
-}
+  io.on('connection', (socket) => {
+    console.log('A user connected');
+  });
+};
 
-export async function down() {
-  // Implementación de la migración hacia abajo
-  await db.schema.dropTable('tasks');
-}
+// === ARCHIVO: tests/task.service.test.ts ===
+import { TaskService } from '../src/application/task.service';
+import { TaskRepository } from '../src/infrastructure/database/task.repository';
+import { Task } from '../src/domain/task';
 
-// === ARCHIVO: scripts/start.sh ===
-#!/bin/bash
-npm run start
-
-// === ARCHIVO: tests/auth/AuthService.test.ts ===
-import { AuthService } from '../../../src/application/auth/AuthService';
-import { AuthRepository } from '../../../src/infrastructure/auth/AuthRepository';
-
-describe('AuthService', () => {
-  let authService: AuthService;
-  let authRepository: AuthRepository;
+describe('TaskService', () => {
+  let taskService: TaskService;
+  let taskRepository: TaskRepository;
 
   beforeEach(() => {
-    authRepository = new AuthRepository();
-    authService = new AuthService(authRepository);
+    taskRepository = new TaskRepository();
+    taskService = new TaskService(taskRepository);
   });
 
-  it('should authenticate user', async () => {
-    const auth = await authService.authenticate('test', 'test');
-    expect(auth).toBeDefined();
+  it('should create a task', async () => {
+    const task: Task = {
+      id: '1',
+      title: 'Test Task',
+      description: 'This is a test task',
+      status: TaskStatus.BACKLOG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const createdTask = await taskService.createTask(task);
+    expect(createdTask).toEqual(task);
   });
 
-  it('should return error for invalid credentials', async () => {
-    try {
-      await authService.authenticate('invalid', 'invalid');
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
+  it('should get a task by id', async () => {
+    const task: Task = {
+      id: '1',
+      title: 'Test Task',
+      description: 'This is a test task',
+      status: TaskStatus.BACKLOG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    await taskService.createTask(task);
+    const retrievedTask = await taskService.getTaskById('1');
+    expect(retrievedTask).toEqual(task);
   });
 
-  it('should return error for missing credentials', async () => {
-    try {
-      await authService.authenticate('', '');
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
+  it('should update a task', async () => {
+    const task: Task = {
+      id: '1',
+      title: 'Updated Task',
+      description: 'This is an updated task',
+      status: TaskStatus.IN_PROGRESS,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const updatedTask = await taskService.updateTask(task);
+    expect(updatedTask).toEqual(task);
   });
 });
 
-// === ARCHIVO: tests/workflow/WorkflowService.test.ts ===
-import { WorkflowService } from '../../../src/application/workflow/WorkflowService';
-import { WorkflowRepository } from '../../../src/infrastructure/workflow/WorkflowRepository';
+// === ARCHIVO: tests/task.controller.test.ts ===
+import { TaskController } from '../src/api/task.controller';
+import { TaskService } from '../src/application/task.service';
+import { Request, Response } from 'express';
+import { Task } from '../src/domain/task';
 
-describe('WorkflowService', () => {
-  let workflowService: WorkflowService;
-  let workflowRepository: WorkflowRepository;
-
-  beforeEach(() => {
-    workflowRepository = new WorkflowRepository();
-    workflowService = new WorkflowService(workflowRepository);
-  });
-
-  it('should get workflow', async () => {
-    const workflow = await workflowService.getWorkflow('1');
-    expect(workflow).toBeDefined();
-  });
-
-  it('should return error for invalid workflow', async () => {
-    try {
-      await workflowService.getWorkflow('invalid');
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
-  });
-
-  it('should return error for missing workflow', async () => {
-    try {
-      await workflowService.getWorkflow('');
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
-  });
-});
-
-// === ARCHIVO: tests/reports/ReportService.test.ts ===
-import { ReportService } from '../../../src/application/reports/ReportService';
-import { ReportRepository } from '../../../src/infrastructure/reports/ReportRepository';
-
-describe('ReportService', () => {
-  let reportService: ReportService;
-  let reportRepository: ReportRepository;
+describe('TaskController', () => {
+  let taskController: TaskController;
+  let taskService: TaskService;
+  let req: Partial<Request>;
+  let res: Partial<Response>;
 
   beforeEach(() => {
-    reportRepository = new ReportRepository();
-    reportService = new ReportService(reportRepository);
+    taskService = new TaskService(new TaskRepository());
+    taskController = new TaskController(taskService);
+    req = { body: {}, params: {} } as Partial<Request>;
+    res = { status: jest.fn().mockReturnThis(), json: jest.fn(), send: jest.fn() } as Partial<Response>;
   });
 
-  it('should get report', async () => {
-    const report = await reportService.getReport('1');
-    expect(report).toBeDefined();
+  it('should create a task', async () => {
+    const task: Task = {
+      id: '1',
+      title: 'Test Task',
+      description: 'This is a test task',
+      status: TaskStatus.BACKLOG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    req.body = task;
+    await taskController.createTask(req as Request, res as Response);
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(res.json).toHaveBeenCalledWith(task);
   });
 
-  it('should return error for invalid report', async () => {
-    try {
-      await reportService.getReport('invalid');
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
+  it('should get a task by id', async () => {
+    const task: Task = {
+      id: '1',
+      title: 'Test Task',
+      description: 'This is a test task',
+      status: TaskStatus.BACKLOG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    req.params.id = '1';
+    await taskController.getTaskById(req as Request, res as Response);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(task);
   });
 
-  it('should return error for missing report', async () => {
-    try {
-      await reportService.getReport('');
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
+  it('should update a task', async () => {
+    const task: Task = {
+      id: '1',
+      title: 'Updated Task',
+      description: 'This is an updated task',
+      status: TaskStatus.IN_PROGRESS,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    req.body = task;
+    await taskController.updateTask(req as Request, res as Response);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(task);
   });
 });
 
